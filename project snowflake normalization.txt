@@ -1,0 +1,241 @@
+create database regexdb;
+USE regexdb;
+
+-- Step 1: Create file format with column count mismatch ignored
+CREATE OR REPLACE FILE FORMAT my_csv_format
+  TYPE = 'CSV'
+  SKIP_HEADER = 1
+  FIELD_OPTIONALLY_ENCLOSED_BY = '"'
+  ERROR_ON_COLUMN_COUNT_MISMATCH = FALSE;
+
+  -- Step 2: Create or replace stage pointing to S3 bucket
+CREATE OR REPLACE STAGE my_s3_stage
+  URL = 's3://mydevyani001'
+  CREDENTIALS = (
+    AWS_KEY_ID = 'access_key',
+    AWS_SECRET_KEY = 'secret_key'
+  )
+  FILE_FORMAT = my_csv_format;
+
+
+  -- Step 3: Create a staging table with all columns as STRING (including extra column)
+CREATE OR REPLACE TEMPORARY TABLE zomato_stage (
+  url STRING,
+  address STRING,
+  name STRING,
+  online_order STRING,
+  book_table STRING,
+  rate STRING,
+  votes STRING,
+  phone STRING,
+  location STRING,
+  rest_type STRING,
+  dish_liked STRING,
+  cuisines STRING,
+  approx_count STRING,
+  reviews_list STRING,
+  listed_type STRING,
+  listed_city STRING,
+  extra_col STRING  -- for 17th column in CSV file
+);
+
+-- Step 4: Load raw data into staging table from S3 stage
+COPY INTO zomato_stage
+FROM @my_s3_stage/mydevyani001
+FILE_FORMAT = my_csv_format
+ON_ERROR = 'CONTINUE';
+
+-- Step 5: Create final table with proper data types
+CREATE OR REPLACE TABLE zomato (
+  url VARCHAR(1024),
+  address VARCHAR(1024),
+  name VARCHAR(255),
+  online_order STRING,
+  book_table STRING,
+  rate FLOAT,           -- cleaned and converted from string
+  votes INT,
+  phone STRING,
+  location VARCHAR(255),
+  rest_type VARCHAR(255),
+  dish_liked VARCHAR(512),
+  cuisines VARCHAR(512),
+  approx_count INT,
+  reviews_list STRING,
+  listed_type STRING,
+  listed_city STRING
+);
+
+-- Step 6: Insert cleaned data from staging table into final table
+
+INSERT INTO zomato
+SELECT
+  url,
+  address,
+  name,
+  online_order,
+  book_table,
+  TRY_CAST(SPLIT_PART(rate, '/', 1) AS FLOAT) AS rate,
+  TRY_CAST(votes AS INT) AS votes,
+  phone,
+  location,
+  rest_type,
+  dish_liked,
+  cuisines,
+  TRY_CAST(approx_count AS INT) AS approx_count,
+  reviews_list,
+  listed_type,
+  listed_city
+FROM zomato_stage;
+
+
+-- Step 7: Verify final data
+SELECT * FROM zomato ;
+
+
+
+CREATE OR REPLACE TABLE dim_restaurant (
+  restaurant_id INT AUTOINCREMENT start 1 increment 1 PRIMARY KEY,
+  name VARCHAR(255),
+  phone STRING,
+  address VARCHAR(1024),
+  online_order STRING,
+  book_table STRING
+);
+
+update dim_restaurant
+set phone =0
+where phone is null;
+
+select * from dim_restaurant;
+
+-- Dimension: Location
+CREATE OR REPLACE TABLE dim_location (
+  location_id INT AUTOINCREMENT start 1 increment 1 PRIMARY KEY,
+  location VARCHAR(255),
+  listed_city STRING
+);
+
+select * from dim_location;
+
+
+CREATE OR REPLACE TABLE dim_cuisine (
+  cuisine_id INT AUTOINCREMENT start 1 increment 1 PRIMARY KEY,
+  cuisines VARCHAR(512)
+);
+
+select * from dim_cuisine;
+
+CREATE OR REPLACE TABLE dim_rest_type (
+  type_id INT AUTOINCREMENT start 1 increment 1 PRIMARY KEY,
+  rest_type VARCHAR(255),
+  listed_type STRING
+);
+select * from dim_rest_type;
+
+
+CREATE OR REPLACE TABLE fact_zomato (
+  fact_id INT AUTOINCREMENT start 1 increment 1,
+  restaurant_id INT,
+  location_id INT,
+  cuisine_id INT,
+  type_id INT,
+  rate FLOAT,
+  votes INT,
+  approx_count INT,
+  reviews_list STRING,
+  FOREIGN KEY (restaurant_id) REFERENCES dim_restaurant(restaurant_id),
+  FOREIGN KEY (location_id) REFERENCES dim_location(location_id),
+  FOREIGN KEY (cuisine_id) REFERENCES dim_cuisine(cuisine_id),
+  FOREIGN KEY (type_id) REFERENCES dim_rest_type(type_id)
+);
+
+
+UPDATE zomato
+SET rate = 0
+WHERE rate IS NULL;
+
+UPDATE zomato
+SET votes = 0
+WHERE votes IS NULL;
+
+select * from fact_zomato;
+
+
+
+-- dim_restaurant
+INSERT INTO dim_restaurant (name, phone, address, online_order, book_table)
+SELECT DISTINCT name, phone, address, online_order, book_table
+FROM zomato;
+
+-- dim_location
+INSERT INTO dim_location (location, listed_city)
+SELECT DISTINCT location, listed_city
+FROM zomato;
+
+-- dim_cuisine
+INSERT INTO dim_cuisine (cuisines)
+SELECT DISTINCT cuisines
+FROM zomato;
+
+-- dim_rest_type
+INSERT INTO dim_rest_type (rest_type, listed_type)
+SELECT DISTINCT rest_type, listed_type
+FROM zomato;
+
+
+
+INSERT INTO fact_zomato (
+  restaurant_id, location_id, cuisine_id, type_id,
+  rate, votes, approx_count, reviews_list
+)
+SELECT
+  r.restaurant_id,
+  l.location_id,
+  c.cuisine_id,
+  t.type_id,
+  z.rate,
+  z.votes,
+  z.approx_count,
+  z.reviews_list
+FROM zomato z
+JOIN dim_restaurant r ON z.name = r.name AND z.phone = r.phone
+JOIN dim_location l ON z.location = l.location AND z.listed_city = l.listed_city
+JOIN dim_cuisine c ON z.cuisines = c.cuisines
+JOIN dim_rest_type t ON z.rest_type = t.rest_type AND z.listed_type = t.listed_type;
+
+
+CREATE OR REPLACE STAGE export_s3_stage
+URL = 's3://mydevyani001'
+CREDENTIALS = (
+  AWS_KEY_ID = 'access_key',
+  AWS_SECRET_KEY = 'secret_key'
+)
+FILE_FORMAT = my_csv_format;
+
+-- Export dimension tables
+COPY INTO @export_s3_stage/upload/dim_table/dim_restaurant.csv
+FROM dim_restaurant
+FILE_FORMAT =my_csv_format
+OVERWRITE = TRUE;
+
+COPY INTO @export_s3_stage/upload/dim_table/dim_location.csv
+FROM dim_location
+FILE_FORMAT =my_csv_format
+OVERWRITE = TRUE;
+
+COPY INTO @export_s3_stage/upload/dim_table/dim_cuisine.csv
+FROM dim_cuisine
+FILE_FORMAT = my_csv_format
+OVERWRITE = TRUE;
+
+COPY INTO @export_s3_stage/upload/dim_table/dim_rest_type.csv
+FROM dim_rest_type
+FILE_FORMAT = my_csv_format
+OVERWRITE = TRUE;
+
+-- Export fact table
+COPY INTO @export_s3_stage/upload/fact_table/fact_zomato.csv
+FROM fact_zomato
+FILE_FORMAT = my_csv_format
+OVERWRITE = TRUE;
+
