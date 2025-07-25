@@ -1,0 +1,136 @@
+create database regexdb;
+use regexdb;
+create table redbus(first_name varchar(20),last_name varchar(20), age int,city_from varchar(20),city_to varchar(20),bus_type varchar(20), seat_type varchar(20),
+booking_type varchar(20),payment_method varchar(20), total_fare int ); 
+
+
+
+select * from redbus_new;
+select first_name,last_name,age from redbus_new;
+
+select count(distinct(first_name)) from redbus_new;
+
+select count(first_name) from redbus_new;
+
+select count(distinct(first_name),(last_name),(age)) from redbus_new;
+
+insert into customer10 (first_name,last_name,age)
+select distinct first_name,last_name,age from redbus_new;
+select count(*) from redbus_new;
+
+
+-- dim tables
+
+
+-- dim customer table
+drop table customer10;
+create or replace table customer10(cid int primary key autoincrement start 1 increment 1 , first_name varchar(20),
+last_name varchar(30), age int);
+-- customer has already exist  this error when we make customer table rather than customer10
+
+select * from customer10; 
+
+insert into customer10 (first_name,last_name,age)
+select distinct first_name,last_name,age from redbus_new;
+ 
+-- dim bus_route
+drop table bus_route;
+create or replace table bus_route (route_id int primary key autoincrement start 1 increment 1,city_from varchar(20),city_to varchar(20));
+insert into  bus_route ( city_from, city_to)
+select distinct city_from, city_to from redbus_new;
+
+select * from bus_route;
+
+
+-- dim bus_type 
+drop table bus_type;
+create or replace table bus_type (bustype_id int primary key autoincrement start 1 increment 1,bus_type varchar,seat_type varchar,booking_type varchar);
+insert into  bus_type ( bus_type, seat_type, booking_type)
+select distinct bus_type, seat_type, booking_type from redbus_new;
+
+select * from bus_type;
+
+
+-- dim payment_type
+drop table payment_type;
+create or replace table payment_type (payment_id int primary key autoincrement start 1 increment 1,payment_method varchar);
+insert into  payment_type ( payment_method)
+select distinct payment_method from redbus_new;
+
+select * from payment_type;
+
+
+-- fact table 
+
+create or replace table fact_redbus(booking_id int primary key autoincrement start 1 increment 1, ticket_fare int, cid int foreign key references customer10(cid),
+route_id int foreign key references bus_route(route_id),
+bustype_id int foreign key references bus_type(bustype_id),
+payment_id int foreign key references payment_type(payment_id));
+
+
+INSERT INTO fact_redbus ( 
+    cid,
+    route_id,
+    bustype_id,
+    payment_id,
+    ticket_fare
+)
+SELECT
+    c.cid,
+    br.route_id, 
+    bt.bustype_id,
+    p.payment_id,
+    r.ticket_fare
+FROM redbus_new r
+JOIN customer10 c ON r.first_name = c.first_name and r.last_name = c.last_name and r.age = c.age -- or use email/phone if better
+JOIN bus_route br ON r.city_from = br.city_from AND r.city_to = br.city_to
+JOIN bus_type bt ON r.bus_type = bt.bus_type and r.seat_type = bt.seat_type and r.booking_type = bt.booking_type
+JOIN payment_type p ON r.payment_method = p.payment_method;  
+
+select * from fact_redbus;
+
+
+
+-- Which are the top 5 most popular routes by booking count?
+
+
+SELECT br.city_from, br.city_to, COUNT(*) AS total_bookings
+FROM fact_redbus f
+JOIN bus_route br ON f.route_id = br.route_id
+GROUP BY br.city_from, br.city_to
+ORDER BY total_bookings DESC
+LIMIT 5;
+
+ -- Which bus type and seat type combination is most used?
+SELECT bt.bus_type, bt.seat_type, COUNT(*) AS total_bookings
+FROM fact_redbus f
+JOIN bus_type bt ON f.bustype_id = bt.bustype_id
+GROUP BY bt.bus_type, bt.seat_type
+ORDER BY total_bookings DESC;
+
+-- What are the most common payment methods used?
+
+SELECT pt.payment_method, COUNT(*) AS total_transactions
+FROM fact_redbus f
+JOIN payment_type pt ON f.payment_id = pt.payment_id
+GROUP BY pt.payment_method
+ORDER BY total_transactions DESC;
+
+-- How are bookings distributed across different age groups?
+
+SELECT 
+    CASE 
+        WHEN age < 18 THEN 'Below 18'
+        WHEN age BETWEEN 18 AND 25 THEN '18-25'
+        WHEN age BETWEEN 26 AND 35 THEN '26-35'
+        WHEN age BETWEEN 36 AND 50 THEN '36-50'
+        ELSE '50+'
+    END AS age_group,
+    COUNT(*) AS total_customers
+FROM customer10 c
+JOIN fact_redbus f ON c.cid = f.cid
+GROUP BY age_group;
+
+
+ 
+ 
