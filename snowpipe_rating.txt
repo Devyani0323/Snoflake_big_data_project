@@ -1,0 +1,56 @@
+create or replace table our_first_db.public.employees(
+userid int,
+movieid int,
+rating float,
+`timestamp` int  -- use backtick
+);
+
+//create file format object 
+// in case any field is empty it will set it as null
+
+create or replace file format manage_db.file_formats.csv_fileformat 
+type = csv
+field_delimiter = ','
+skip_header = 1
+null_if = ('NULL','null')
+empty_field_as_null = True;
+
+
+//create stage object with integration object & file format object
+// create a folder name as csv and have snowpipe
+
+CREATE OR REPLACE STAGE manage_db.external_stages.aws_stage
+URL = 's3://23devyani/devyani_fldr/ratings_csv.csv'
+CREDENTIALS = (
+    AWS_KEY_ID = 'key_id'
+    AWS_SECRET_KEY = 'secrate_key'
+);
+
+//create stage object with integration object & file format object
+LIST @manage_db.external_stages.aws_stage;
+
+create or replace schema manage_db.pipes;
+
+//define pipe
+//autoigest option is true <= load file when found in s3
+// copy the data in the employees table <= from s3
+create or replace pipe manage_db.pipes.employee_pipe
+auto_ingest = TRUE
+as
+copy into our_first_db.public.employees
+from @manage_db.external_stages.aws_stage
+file_format = manage_db.file_formats.csv_fileformat;
+
+ -- copy into our_first_db.public.employees
+ -- from @manage_db.external_stages.aws_stage
+ -- file_format = manage_db.file_formats.csv_fileformat;
+
+ -- delete from our_first_db.public.employees;
+select *from our_first_db.public.employees;
+
+
+// Pipe auto-ingest tabhi kaam karega jab tum S3 bucket me koi new file upload/update karogi.
+// Tumne pehle hi file ek baar daali thi aur pipe banane ke baad koi nayi file nahi aayi, //isliye Snowflake ne kuch bhi load nahi kiya.
+
+desc pipe employee_pipe;
+
