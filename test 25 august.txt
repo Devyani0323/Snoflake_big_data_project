@@ -1,0 +1,94 @@
+USE   CASE    SNOWFLAKE   TEST
+
+          This use-case demonstrates an end-to-end Snowflake data pipeline using Amazon S3 as the
+landing zone. Customer data files are first stored in an S3 bucket and accessed in
+Snowflake through an external stage configured with a CSV file format. The raw data is
+loaded into a staging table using COPY INTO, with a retention period set for time travel. A
+stream object is then created on the staging table to track incremental changes. When new
+or updated files are uploaded to the S3 bucket, the staging table is reloaded, the stream
+captures the delta records, and a MERGE operation applies these changes into a curated
+table. This workflow simulates a real-time ingestion and change-data-capture (CDC) pattern,
+and can be implemented within an hour for hands-on practice.
+Step 1. Create S3 bucket and upload files
+Step 2. Create Warehouse, Database, Schema in Snowflake
+Step 3. Create File Format
+Step 4. Create External Stage to S3
+Step 5. Create Staging Table & Load Initial Data
+Step 6. Set Retention Period
+Step 7. Create Curated Table & Stream
+Step 8. Upload Delta File and Load It [customer delta
+Step 9. Merge Changes into Curated Table
+Update record in case you find the first_name and last_name is same
+If match don’t find insert the row
+
+
+
+
+CREATE OR REPLACE WAREHOUSE my_WH WAREHOUSE_SIZE = 'X-SMALL';
+CREATE OR REPLACE DATABASE test_db;
+CREATE OR REPLACE SCHEMA raw;
+
+
+drop file format  test_db.raw.csv_format;
+
+  CREATE OR REPLACE FILE FORMAT test_db.raw.csv_format
+  TYPE = CSV
+  FIELD_DELIMITER = ','
+  FIELD_OPTIONALLY_ENCLOSED_BY = '"'
+  SKIP_HEADER = 1;
+
+CREATE OR REPLACE TABLE test_db.raw.customer_csv(
+  customer_id INT,
+  first_name STRING,
+  last_name STRING,
+  email STRING,
+  signup_date DATE,
+  country STRING
+);
+
+
+
+CREATE OR REPLACE STAGE test_db.raw.aws_stage
+URL = 's3://snowflake-project-03/'
+CREDENTIALS = (
+    AWS_KEY_ID = 'KEY ID'
+    AWS_SECRET_KEY = 'SECRATE KEY')
+FILE_FORMAT = raw.csv_format;
+
+
+COPY INTO test_db.raw.customer_csv
+FROM @test_db.raw.aws_stage
+file_format=test_db.raw.csv_format;
+
+
+select * from test_db.raw.customer_csv;
+
+
+ALTER TABLE test_db.raw.customer_csv SET DATA_RETENTION_TIME_IN_DAYS = 1;
+
+                                   
+CREATE OR REPLACE TABLE raw.customer_curated (
+  customer_id INT,
+  first_name STRING,
+  last_name STRING,
+  email STRING,
+  signup_date DATE,
+  country STRING
+);
+
+-- Initial load
+INSERT INTO raw.customer_curated
+SELECT * FROM raw.customer_csv;
+
+-- Create stream to capture incremental changes
+CREATE OR REPLACE STREAM raw.customer_stream 
+ON TABLE raw.customer_csv;
+
+
+COPY INTO test_db.raw.customer_csv
+FROM @test_db.raw.aws_stage
+FILES = ('customers_delta.csv')
+ON_ERROR = 'CONTINUE';
+
+
+
